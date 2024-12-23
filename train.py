@@ -1,4 +1,4 @@
-from tensorflow.keras.datasets import mnist
+from tensorflow.keras.datasets import fashion_mnist
 from autoencoder import Autoencoder
 
 
@@ -7,7 +7,7 @@ BATCH_SIZE = 32
 EPOCHS = 20
 
 def load_mnist():
-    (x_train, y_train), (x_test, y_test) = mnist.load_data()#60,000 training images and 10,000 test images
+    (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()#60,000 training images and 10,000 test images
 
     
     x_train = x_train.astype('float32') / 255 #we normalize the pixel values to be between 0 and 1
@@ -37,9 +37,17 @@ def train(x_train, learning_rate, batch_size, epochs):
     autoencoder.compile(learning_rate)
     autoencoder.train(x_train, batch_size, epochs)
 
+    return autoencoder
 if __name__ == "__main__":
 
     x_train, _, _, _ = load_mnist()  #we put _ for the labels because we are not using them
     #x_train, y_train, x_test, y_test = load_mnist()
 
     autoencoder = train(x_train[:500],LEARNING_RATE, BATCH_SIZE, EPOCHS)
+
+
+    autoencoder.save("model") #save the model to disk
+
+    autoencoder2 = Autoencoder.load("model") #load the model from disk
+    autoencoder2.summary() #print the model summary
+    
