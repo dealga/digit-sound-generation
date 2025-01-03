@@ -1,5 +1,5 @@
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Input, Conv2D, ReLU, BatchNormalization, Flatten, Dense, Reshape,Conv2DTranspose, Activation
+from tensorflow.keras.layers import Input, Conv2D, ReLU, BatchNormalization, Flatten, Dense, Reshape, Conv2DTranspose, Activation, Lambda
 #to get the shape of the data before flattening
 #we want to move from flat data to a 3D arrays
 from tensorflow.keras import backend as K 
@@ -8,18 +8,33 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import MeanSquaredError
 import os
 import pickle
+import tensorflow as tf
 
-class Autoencoder:
+#eager execution enables the immediate evaluation of operations even before the graph is complete
+#eager execution is enabled by default in tensorflow 2.0
+#we disable it as vae doesnt work with eager execution 
 
-    #this is a deep convolutional autoencoder with mirrored encoder and decoder
+import tensorflow as tf
+
+#tf.compat.v1.disable_eager_execution()
+
+
+
+
+class VAE:
+
+    #this is a deep convolutional VAE with mirrored encoder and decoder
     def __init__(self, input_shape, conv_filters, conv_kernels, conv_strides, latent_space_dim):
-        #latent space is the bottleneck of the autoencoder
+
+        #latent space is the bottleneck of the variational autoencoder regularized by the KL divergence
 
         self.input_shape = input_shape #width, height, no. of channels
         self.conv_filters = conv_filters 
         self.conv_kernels = conv_kernels
         self.conv_strides = conv_strides
         self.latent_space_dim = latent_space_dim #bottleneck (if 2 then bottleneck will have 2 dimensions)
+
+        self.reconstruction_loss_weight = 1000
 
         self.encoder = None
         self.decoder = None
@@ -38,11 +53,56 @@ class Autoencoder:
         self.decoder.summary()
         self.model.summary()
 
-    def compile(self, learning_rate=0.0001): #keras models require compiling before training
+    # def compile(self, learning_rate=0.0001): #keras models require compiling before training
+    #     optimizer = Adam(learning_rate=learning_rate)
+    #     mse_loss = MeanSquaredError()    ##root mean square error loss or reconstruction loss
+    #     self.model.compile(optimizer=optimizer, loss=self._calculate_combined_loss,
+    #                                             metrics = [self._calculate_reconstruction_loss,
+    #                                                        self._calculate_kl_loss]) #self.model is the VAE
+
+    def compile(self, learning_rate=0.0001):
         optimizer = Adam(learning_rate=learning_rate)
-        mse_loss = MeanSquaredError()    ##root mean square error loss or reconstruction loss
-        self.model.compile(optimizer=optimizer, loss=mse_loss)  #self.model is the autoencoder
-    
+        
+        # Define custom loss function that properly handles the KL divergence
+        def vae_loss(y_true, y_pred):
+            # Reconstruction loss
+            reconstruction_loss = tf.reduce_mean(
+                tf.reduce_sum(
+                    tf.keras.losses.binary_crossentropy(y_true, y_pred),
+                    axis=[1, 2, 3]
+                )
+            )
+            
+            # KL divergence loss
+            kl_loss = -0.5 * tf.reduce_mean(
+                tf.reduce_sum(
+                    1 + self.log_variance - tf.square(self.mu) - tf.exp(self.log_variance),
+                    axis=1
+                )
+            )
+            
+            return self.reconstruction_loss_weight * reconstruction_loss + kl_loss
+        
+        self.model.compile(optimizer=optimizer, loss=vae_loss)
+
+    #changed for fn(x) error
+    # def compile(self, learning_rate=0.0001):
+    #     optimizer = Adam(learning_rate=learning_rate)
+        
+    #     def reconstruction_loss_metric(y_true, y_pred):
+    #         return self._calculate_reconstruction_loss(y_true, y_pred)
+            
+    #     def kl_loss_metric(y_true, y_pred):
+    #         return self._calculate_kl_loss(y_true, y_pred)
+            
+    #     self.model.compile(
+    #         optimizer=optimizer,
+    #         loss=self._calculate_combined_loss,
+    #         metrics=[reconstruction_loss_metric, kl_loss_metric]
+    #     )
+
+
+
     def train(self, x_train, batch_size, num_epochs):
         self.model.fit(
             x_train, x_train, #the second x_train is the target i.e. we are trying to reconstruct the input
@@ -67,21 +127,70 @@ class Autoencoder:
 
        
 
-    @classmethod #he load() method is used to create a new Autoencoder object based on some 
+    @classmethod #he load() method is used to create a new VAE object based on some 
                 #saved data (parameters and weights). It doesn't operate on an existing instance 
-                # of Autoencoder. Instead, it creates a new instance by using saved information.
+                # of VAE. Instead, it creates a new instance by using saved information.
     def load(cls, save_folder="."):
         parameters_path = os.path.join(save_folder, "parameters.pkl")
         with open(parameters_path, 'rb') as f:
             parameters = pickle.load(f)
 
-        autoencoder = Autoencoder(*parameters) 
+        variationalautoencoder = VAE(*parameters) 
         weights_path = os.path.join(save_folder, "weights.weights.h5")
-        autoencoder.load_weights(weights_path)
+        variationalautoencoder.load_weights(weights_path)
 
-        return autoencoder 
+        return variationalautoencoder 
+
     
-            
+    def _calculate_combined_loss(self, y_target, y_predicted):
+        reconstruction_loss = self._calculate_reconstruction_loss(y_target, y_predicted)
+        kl_loss = self._calculate_kl_loss(y_target, y_predicted)
+
+        combined_loss = self.reconstruction_loss_weight * reconstruction_loss + kl_loss
+
+        return combined_loss
+
+    #this is changed for fn(x) error
+
+    # def _calculate_combined_loss(self, y_target, y_predicted):
+    #     def combined_loss(y_true, y_pred):
+    #         reconstruction_loss = self._calculate_reconstruction_loss(y_true, y_pred)
+    #         kl_loss = self._calculate_kl_loss(y_true, y_pred)
+    #         return self.reconstruction_loss_weight * reconstruction_loss + kl_loss
+    #     return combined_loss(y_target, y_predicted)
+
+    def _calculate_reconstruction_loss(self, y_target, y_predicted):
+        error = y_target - y_predicted
+        reconstruction_loss = K.mean(K.square(error), axis=[1, 2, 3]) #k.square is the mean square error
+
+        return reconstruction_loss
+
+    #changed for fn(x) error
+
+    # def _calculate_reconstruction_loss(self, y_target, y_predicted):
+    #     def reconstruction_loss(y_true, y_pred):
+    #         error = y_true - y_pred
+    #         reconstruction_loss = K.mean(K.square(error), axis=[1, 2, 3])
+    #         return reconstruction_loss
+    #     return Lambda(lambda x: reconstruction_loss(y_target, y_predicted))(y_target)
+
+
+
+
+    def _calculate_kl_loss(self, y_target, y_predicted):
+        kl_loss = -0.5 * K.sum(1 + self.log_variance - K.square(self.mu) - K.exp(self.log_variance), axis=1)
+        #K.exp(log_variance) is the variance i.e. sigma^2
+
+        return kl_loss
+
+    #changed for fn(x) error
+
+    # def _calculate_kl_loss(self, y_target, y_predicted):
+    #     def kl_loss(_, __):
+    #         kl_loss = -0.5 * K.sum(1 + self.log_variance - K.square(self.mu) - K.exp(self.log_variance), axis=1)
+    #         return kl_loss
+    #     return Lambda(lambda x: kl_loss(y_target, y_predicted))(y_target)
+
 
     def _create_folder_if_it_doesnt_exist(self, folder):
         if not os.path.exists(folder):
@@ -111,7 +220,7 @@ class Autoencoder:
     def _build(self):
         self._build_encoder()
         self._build_decoder()
-        self._build_autoencoder()
+        self._build_variationalautoencoder()
 
     def _build_encoder(self):
         encoder_input = self._add_encoder_input() #add input layer to the encoder
@@ -119,7 +228,7 @@ class Autoencoder:
         bottleneck = self._add_bottleneck(conv_layers)  #bottleneck is the output of the encoder
 
         self._model_input = encoder_input #input to the model is the input to the encoder
-                                          #this is used in the _build_autoencoder function
+                                          #this is used in the _build_variationalautoencoder function
         self.encoder = Model(encoder_input, bottleneck, name="encoder")    #we are creating a keras model
                                                                            #and assigning it to the encoder
                                                                            #which was set as null in the 
@@ -161,23 +270,100 @@ class Autoencoder:
 
         return x
 
-    def _add_bottleneck(self, x):
+    # def _add_bottleneck(self, x):
 
-        #we store the shape of the data before flattening to use in the { DECODER }
-        #this is done to mirror the encoder in the decoder
+    # #    #we store the shape of the data before flattening to use in the { DECODER }
+    # #    #this is done to mirror the encoder in the decoder
 
-        self.shape_before_bottleneck = K.int_shape(x)[1:]   #[batch_size, 4, 4, 8] 
-                                                            #we are interested in the 4, 4, 8
-                                                        #which is the shape of the data before flattening
+    #     self.shape_before_bottleneck = K.int_shape(x)[1:]   #[batch_size, 4, 4, 8] 
+    # #                                                        #we are interested in the 4, 4, 8
+    # #                                                    #which is the shape of the data before flattening
+
 
 
 
         
-        #flatten data and add bottleneck(dense layer)
+    # #    #flatten data and add bottleneck  with gaussian sampling (dense layer)
+
+
+    #     x = Flatten(name="encoder_flatten")(x)
+
+    # #    #we need a dense layer to get the mean and log variance of the data
+    # #    #both are vectors and have the same dimsionalities as the latent space
+
+    #     self.mu = Dense(self.latent_space_dim, name="mu")(x)  #mean of the data
+
+    # #    #same as the mean, the log variance is a vector with the same dimensionality as the latent space
+
+    #     self.log_variance = Dense(self.latent_space_dim, name="log_variance")(x) #log variance of the data
+
+    # #    #we dont have a sequential graph of layers here
+    # #    #as we branch out into two separate layers
+
+    # #    #now we sample from the gaussian distribution defined by the mean and log variance
+
+    # #    #we need a function to sample from the distribution 
+
+
+    #     def sample_point_from_normal_distribution(args):  #args is a tuple containing 
+    # #                                                      #the mean and log variance 
+    # #                                                      #passed to the lambda layer
+    #         mu , log_variance = args
+
+    #         epsilon = K.random_normal(shape=K.shape(mu), mean=0.0, stddev=1.0) #epsilon is a random tensor
+    # #                                                                           #sampled from the 
+    # #                                                                          #standard normal distribution
+
+            
+    # #        #z = mu + sigma * epsilon
+    # #        #where z is the sampled point
+            
+    # #        #sigma = exp(log(sigma^2)/2)
+
+    #         sampled_point = mu + K.exp(log_variance / 2) * epsilon #sampled point is the mean plus 
+    # #                                                               #the standard deviation times epsilon
+
+    #         return sampled_point
+
+    # #    #we use lambda layers to define custom layers in keras
+
+    #     x = Lambda(sample_point_from_normal_distribution, name="encoder_output")([self.mu, self.log_variance])
+    # #    #lambda layer is used to define custom layers in keras
+    # #    #it takes in a function and its arguments
+    #     return x
+
+
+    def _add_bottleneck(self, x):
+        self.shape_before_bottleneck = K.int_shape(x)[1:]
+        
         x = Flatten(name="encoder_flatten")(x)
-        x = Dense(self.latent_space_dim, name="encoder_output")(x) # here latent space dim is the number of
-                                                                   # neurons in the dense layer
+        self.mu = Dense(self.latent_space_dim, name="mu")(x)
+        self.log_variance = Dense(self.latent_space_dim, name="log_variance")(x)
+        
+        def sample_point_from_normal_distribution(args):
+            mu, log_variance = args
+            epsilon = tf.random.normal(tf.shape(mu), mean=0., stddev=1.)
+            sampled_point = mu + tf.exp(log_variance / 2) * epsilon
+            return sampled_point
+        
+        x = Lambda(sample_point_from_normal_distribution, name="encoder_output")([self.mu, self.log_variance])
         return x
+
+    # def _add_bottleneck(self, x):
+    #     self.shape_before_bottleneck = K.int_shape(x)[1:]
+        
+    #     x = Flatten(name="encoder_flatten")(x)
+    #     self.mu = Dense(self.latent_space_dim, name="mu")(x)
+    #     self.log_variance = Dense(self.latent_space_dim, name="log_variance")(x)
+
+    #     def sample_point_from_normal_distribution(args):
+    #         mu, log_variance = args
+    #         epsilon = K.random_normal(shape=K.shape(mu), mean=0., stddev=1.)
+    #         sampled_point = mu + K.exp(log_variance / 2) * epsilon
+    #         return sampled_point
+
+    #     x = Lambda(sample_point_from_normal_distribution, name="encoder_output")([self.mu, self.log_variance])
+    #     return x
 
     def _build_decoder(self):
         decoder_input = self._add_decoder_input()
@@ -257,18 +443,18 @@ class Autoencoder:
 
 
 
-    def _build_autoencoder(self):
+    def _build_variationalautoencoder(self):
         #connect the encoder and decoder
         model_input = self._model_input
         model_output = self.decoder(self.encoder(model_input)) #we feed model_input to the encoder
 
-        self.model = Model(model_input, model_output, name="autoencoder") #model is the autoencoder
+        self.model = Model(model_input, model_output, name="variationalautoencoder") #model is the variationalautoencoder
 
     
 
 
 if __name__ == "__main__":
-    autoencoder = Autoencoder(
+    variationalautoencoder = VAE(
         input_shape=(28, 28, 1),
         conv_filters=(32, 64, 64, 64),
         conv_kernels=(3, 3, 3 ,3),
@@ -279,5 +465,5 @@ if __name__ == "__main__":
         latent_space_dim=2    #we set this to 2 as we want to visualize the data in 2D
     )
 
-    autoencoder.summary()
+    variationalautoencoder.summary()
 
